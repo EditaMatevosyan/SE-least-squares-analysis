@@ -1,229 +1,192 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Tuple
+
 import numpy as np
 
-# Task 2: Implement normal-equation-based solver
+
 class LeastSquaresError(Exception):
     """Custom exception for least-squares related errors."""
     pass
 
 
-def least_squares_normal(A, b):
+def least_squares_normal(A: np.ndarray, b: np.ndarray) -> np.ndarray:
     """
-    Compute the least-squares solution x that minimizes ||Ax - b||_2^2
-    using the normal equations: (A^T A) x = A^T b.
+    Solve min_x ||Ax - b||_2^2 via the normal equations (A^T A)x = A^T b.
 
     Parameters
     ----------
-    A : array-like, shape (m, n)
+    A : np.ndarray of shape (m, n)
         Measurement matrix (rows = observations, columns = features).
-    b : array-like, shape (m,)
+    b : np.ndarray of shape (m,)
         Observation vector.
 
     Returns
     -------
-    x : np.ndarray, shape (n,)
-        Estimated parameter vector.
+    x : np.ndarray of shape (n,)
+        Least-squares estimate.
 
     Raises
     ------
     LeastSquaresError
-        If the input shapes are invalid or the system is not overdetermined.
+        If shapes are invalid or the system is not overdetermined (m <= n).
     numpy.linalg.LinAlgError
-        If (A^T A) is singular or nearly singular and cannot be solved.
+        If A^T A is singular or nearly singular.
     """
-    # Convert inputs to NumPy arrays of type float
     A = np.asarray(A, dtype=float)
     b = np.asarray(b, dtype=float)
 
-    # Basic shape checks
     if A.ndim != 2:
         raise LeastSquaresError("A must be a 2D matrix.")
-    if b.ndim == 2 and b.shape[1] == 1:
-        b = b.reshape(-1)
-    elif b.ndim != 1:
-        raise LeastSquaresError("b must be a 1D vector or a column vector.")
-
+    if b.ndim != 1:
+        raise LeastSquaresError("b must be a 1D vector.")
     m, n = A.shape
     if b.shape[0] != m:
         raise LeastSquaresError(
-            f"Dimension mismatch: A has {m} rows but b has length {b.shape[0]}."
+            f"Shape mismatch: A has {m} rows but b has length {b.shape[0]}."
         )
-
-    if m < n:
-        # Under-determined system – not the usual least-squares scenario
+    if m <= n:
         raise LeastSquaresError(
-            f"System is not overdetermined: got m = {m}, n = {n} (need m >= n)."
+            f"System is not overdetermined: m={m}, n={n}. Need m > n."
         )
 
-    # Step 1: Compute normal matrix N = A^T A
-    ATA = A.T @ A     # shape (n, n)
+    ATA = A.T @ A
+    ATb = A.T @ b
 
-    # Step 2: Compute right-hand side c = A^T b
-    ATb = A.T @ b     # shape (n,)
-
-    # Step 3: Solve (A^T A) x = A^T b
     x = np.linalg.solve(ATA, ATb)
-
     return x
 
-# Optional: Least squares using SVD (part of Task 2/4 enhancement)
-def least_squares_svd(A, b, tol=1e-10):
+
+def least_squares_svd(A: np.ndarray, b: np.ndarray, rcond: float | None = None) -> np.ndarray:
     """
-    Least-squares solution using SVD (A = U Σ V^T).
+    Solve min_x ||Ax - b||_2^2 via SVD-based pseudoinverse.
 
     Parameters
     ----------
-    A : array-like, shape (m, n)
+    A : np.ndarray of shape (m, n)
         Measurement matrix.
-    b : array-like, shape (m,)
+    b : np.ndarray of shape (m,)
         Observation vector.
-    tol : float
-        Tolerance for treating singular values as zero.
+    rcond : float or None
+        Cutoff for small singular values (passed to numpy.linalg.pinv).
 
     Returns
     -------
-    x : np.ndarray, shape (n,)
-        Estimated parameter vector.
+    x : np.ndarray of shape (n,)
+        Least-squares estimate.
     """
     A = np.asarray(A, dtype=float)
-    b = np.asarray(b, dtype=float).reshape(-1)
+    b = np.asarray(b, dtype=float)
 
-    # Compute thin SVD: A = U Σ Vt
-    U, s, Vt = np.linalg.svd(A, full_matrices=False)
+    if A.ndim != 2:
+        raise LeastSquaresError("A must be a 2D matrix.")
+    if b.ndim != 1:
+        raise LeastSquaresError("b must be a 1D vector.")
+    m, n = A.shape
+    if b.shape[0] != m:
+        raise LeastSquaresError(
+            f"Shape mismatch: A has {m} rows but b has length {b.shape[0]}."
+        )
 
-    # Pseudoinverse step: invert non-zero singular values
-    s_inv = np.array([1/s_i if s_i > tol else 0 for s_i in s])
-
-    # LS solution: x = V Σ⁺ U^T b
-    x = Vt.T @ (s_inv * (U.T @ b))
+    A_pinv = np.linalg.pinv(A, rcond=rcond)
+    x = A_pinv @ b
     return x
 
 
-# Task 3: Error and approximation analysis module
-def residual_analysis(A, b, x):
+def compute_residual(A: np.ndarray, x: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, float]:
     """
-    Compute residual vector and residual norm for Ax ≈ b.
+    Compute residual vector r = b - Ax and its Euclidean norm.
 
     Parameters
     ----------
-    A : array-like, shape (m, n)
-    b : array-like, shape (m,)
-    x : array-like, shape (n,)
+    A : np.ndarray of shape (m, n)
+    x : np.ndarray of shape (n,)
+    b : np.ndarray of shape (m,)
 
     Returns
     -------
-    residual : np.ndarray, shape (m,)
-        Residual vector r = Ax - b.
-    residual_norm : float
-        Euclidean norm ||r||_2.
+    r : np.ndarray of shape (m,)
+        Residual vector.
+    r_norm : float
+        Euclidean norm of the residual vector.
     """
     A = np.asarray(A, dtype=float)
-    b = np.asarray(b, dtype=float).reshape(-1)
-    x = np.asarray(x, dtype=float).reshape(-1)
+    x = np.asarray(x, dtype=float)
+    b = np.asarray(b, dtype=float)
 
-    residual = A @ x - b
-    residual_norm = float(np.linalg.norm(residual, ord=2))
+    r = b - A @ x
+    r_norm = float(np.linalg.norm(r, ord=2))
+    return r, r_norm
 
-    return residual, residual_norm
+
+@dataclass
+class IncrementalState:
+    ATA: np.ndarray
+    ATb: np.ndarray
+    n_obs: int
 
 
-# Task 4: Incremental / streaming least squares estimator
 class IncrementalLeastSquares:
     """
-    Incremental / streaming least squares estimator based on normal equations.
+    Incremental least squares using aggregated normal equations.
 
-    Maintains N = A^T A and c = A^T b and updates them when new data batches arrive.
+    Maintains:
+        ATA = sum_i a_i^T a_i
+        ATb = sum_i a_i^T b_i
+    where a_i is a row of A, b_i the corresponding observation.
     """
 
-    def __init__(self, n_features):
-        """
-        Parameters
-        ----------
-        n_features : int
-            Number of features (columns of A), including intercept if used.
-        """
+    def __init__(self, n_features: int) -> None:
         self.n_features = n_features
-        # Initialize N = A^T A and c = A^T b to zeros
-        self.N = np.zeros((n_features, n_features), dtype=float)
-        self.c = np.zeros(n_features, dtype=float)
-        self.m_total = 0  # total number of observations seen
+        self.ATA = np.zeros((n_features, n_features), dtype=float)
+        self.ATb = np.zeros(n_features, dtype=float)
+        self.n_obs = 0
 
-    def add_batch(self, A_batch, b_batch):
+    def add_batch(self, A_batch: np.ndarray, b_batch: np.ndarray) -> None:
         """
-        Add a new batch of data and update N and c.
+        Incorporate a new batch of observations.
 
         Parameters
         ----------
-        A_batch : array-like, shape (k, n_features)
-            New rows of the measurement matrix.
-        b_batch : array-like, shape (k,)
-            Corresponding observations.
+        A_batch : np.ndarray of shape (m_batch, n_features)
+        b_batch : np.ndarray of shape (m_batch,)
         """
         A_batch = np.asarray(A_batch, dtype=float)
-        b_batch = np.asarray(b_batch, dtype=float).reshape(-1)
+        b_batch = np.asarray(b_batch, dtype=float)
 
-        k, n = A_batch.shape
+        if A_batch.ndim != 2:
+            raise LeastSquaresError("A_batch must be a 2D matrix.")
+        if b_batch.ndim != 1:
+            raise LeastSquaresError("b_batch must be a 1D vector.")
+        m_batch, n = A_batch.shape
         if n != self.n_features:
-            raise ValueError(
-                f"Expected {self.n_features} features, got {n}."
+            raise LeastSquaresError(
+                f"Feature mismatch: expected {self.n_features}, got {n}."
             )
-        if b_batch.shape[0] != k:
-            raise ValueError(
-                f"Batch size mismatch: A_batch has {k} rows, b_batch has {b_batch.shape[0]} entries."
+        if b_batch.shape[0] != m_batch:
+            raise LeastSquaresError(
+                f"Shape mismatch: A_batch has {m_batch} rows but "
+                f"b_batch has length {b_batch.shape[0]}."
             )
 
-        # Update aggregated normal matrix and right-hand side
-        self.N += A_batch.T @ A_batch
-        self.c += A_batch.T @ b_batch
-        self.m_total += k
+        self.ATA += A_batch.T @ A_batch
+        self.ATb += A_batch.T @ b_batch
+        self.n_obs += m_batch
 
-    def solve(self):
+    def solve(self) -> np.ndarray:
         """
-        Solve for the current least squares estimate x.
+        Compute the current least-squares estimate x using aggregated ATA, ATb.
 
         Returns
         -------
-        x : np.ndarray, shape (n_features,)
-            Current parameter estimate based on all data seen so far.
+        x : np.ndarray of shape (n_features,)
         """
-        if self.m_total == 0:
-            raise RuntimeError("No data has been added yet.")
-
-        # Solve N x = c
-        x = np.linalg.solve(self.N, self.c)
+        if self.n_obs == 0:
+            raise LeastSquaresError("No observations have been added yet.")
+        x = np.linalg.solve(self.ATA, self.ATb)
         return x
-    
 
-#Task 5: Orthogonality check for least squares
-def orthogonality_check(A, b, x):
-    """
-    Check the orthogonality condition A^T r ≈ 0 for least squares residuals.
-
-    Parameters
-    ----------
-    A : array-like, shape (m, n)
-    b : array-like, shape (m,)
-    x : array-like, shape (n,)
-
-    Returns
-    -------
-    residual : np.ndarray, shape (m,)
-        Residual vector r = Ax - b.
-    residual_norm : float
-        Norm ||r||_2.
-    At_r_norm : float
-        Norm ||A^T r||_2, should be close to 0 for a correct LS solution.
-    """
-    A = np.asarray(A, dtype=float)
-    b = np.asarray(b, dtype=float).reshape(-1)
-    x = np.asarray(x, dtype=float).reshape(-1)
-
-    # Residual
-    residual = A @ x - b
-    residual_norm = float(np.linalg.norm(residual, ord=2))
-
-    # Orthogonality measure
-    At_r = A.T @ residual
-    At_r_norm = float(np.linalg.norm(At_r, ord=2))
-
-    return residual, residual_norm, At_r_norm
-
+    def get_state(self) -> IncrementalState:
+        """Return a snapshot of the internal state (for debugging or logging)."""
+        return IncrementalState(ATA=self.ATA.copy(), ATb=self.ATb.copy(), n_obs=self.n_obs)

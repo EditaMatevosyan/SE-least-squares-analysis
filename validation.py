@@ -1,77 +1,93 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Callable
+
 import numpy as np
-from least_squares import (
-    least_squares_normal,
-    least_squares_svd,
-    orthogonality_check,
-)
 
-def noise_sensitivity_experiment(
-    noise_levels=(0.1, 0.5, 1.0, 2.0),
-    n_trials=30,
-    random_seed=0,
-):
+
+@dataclass
+class OrthogonalityResult:
+    max_dot: float
+    mean_dot: float
+    passed: bool
+
+
+@dataclass
+class NoiseStats:
+    mean_param_error: float
+    mean_residual_norm: float
+
+
+def check_orthogonality(
+    A: np.ndarray,
+    b: np.ndarray,
+    x: np.ndarray,
+    tol: float = 1e-10,
+) -> OrthogonalityResult:
     """
-    Compare normal-equation and SVD solvers under increasing noise.
+    Check orthogonality of residual r = b - Ax to the column space of A.
 
-    For each noise level σ:
-      - generate synthetic data y = 2 + 3 t + N(0, σ^2)
-      - estimate parameters with both solvers
-      - record parameter error and residual norms
-      - average over n_trials
+    Returns
+    -------
+    OrthogonalityResult
+        max_dot, mean_dot, passed flag.
     """
-    rng = np.random.default_rng(random_seed)
+    A = np.asarray(A, dtype=float)
+    b = np.asarray(b, dtype=float)
+    x = np.asarray(x, dtype=float)
 
-    # True parameters
-    beta_true = np.array([2.0, 3.0])
+    r = b - A @ x  # residual
+    dots = A.T @ r  # dot products with each column
 
-    # Fixed design (t values)
-    t = np.linspace(0, 10, 50)
-    A = np.column_stack([np.ones_like(t), t])
+    abs_dots = np.abs(dots)
+    max_dot = float(abs_dots.max())
+    mean_dot = float(abs_dots.mean())
+    passed = max_dot <= tol
 
-    results = []
+    return OrthogonalityResult(max_dot=max_dot, mean_dot=mean_dot, passed=passed)
 
-    for sigma in noise_levels:
-        err_norm_normal = []
-        resid_norm_normal = []
 
-        err_norm_svd = []
-        resid_norm_svd = []
+def run_noise_sensitivity(
+    sigmas: np.ndarray,
+    n_trials: int,
+    make_data_fn: Callable[[float], tuple[np.ndarray, np.ndarray, np.ndarray]],
+    solver_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+) -> Dict[float, NoiseStats]:
+    """
+    Run repeated experiments for different noise levels and summarize results.
+
+    Parameters
+    ----------
+    sigmas : np.ndarray
+        Array of noise standard deviations.
+    n_trials : int
+        Number of trials per sigma.
+    make_data_fn : callable
+        Function taking sigma -> (A, b, x_true).
+    solver_fn : callable
+        Function taking (A, b) -> x_hat.
+
+    Returns
+    -------
+    Dict[float, NoiseStats]
+        Mapping noise_sigma -> stats.
+    """
+    results: Dict[float, NoiseStats] = {}
+
+    for sigma in sigmas:
+        param_errors: list[float] = []
+        residual_norms: list[float] = []
 
         for _ in range(n_trials):
-            # Generate noisy observations
-            noise = rng.normal(0.0, sigma, size=t.shape)
-            y = beta_true[0] + beta_true[1] * t + noise
+            A, b, x_true = make_data_fn(float(sigma))
+            x_hat = solver_fn(A, b)
+            param_errors.append(float(np.linalg.norm(x_hat - x_true)))
+            residual_norms.append(float(np.linalg.norm(b - A @ x_hat)))
 
-            # Normal equations
-            x_n = least_squares_normal(A, y)
-            r_n, rnorm_n, _ = orthogonality_check(A, y, x_n)
-            err_norm_normal.append(np.linalg.norm(x_n - beta_true))
-            resid_norm_normal.append(rnorm_n)
+        results[float(sigma)] = NoiseStats(
+            mean_param_error=float(np.mean(param_errors)),
+            mean_residual_norm=float(np.mean(residual_norms)),
+        )
 
-            # SVD
-            x_s = least_squares_svd(A, y)
-            r_s, rnorm_s, _ = orthogonality_check(A, y, x_s)
-            err_norm_svd.append(np.linalg.norm(x_s - beta_true))
-            resid_norm_svd.append(rnorm_s)
-
-        results.append({
-            "sigma": sigma,
-            "param_err_normal": np.mean(err_norm_normal),
-            "resid_norm_normal": np.mean(resid_norm_normal),
-            "param_err_svd": np.mean(err_norm_svd),
-            "resid_norm_svd": np.mean(resid_norm_svd),
-        })
-
-    # Print summary table
-    print("Noise sensitivity experiment (averaged over", n_trials, "trials):\n")
-    print(f"{'σ':>6} | {'||x_n - x*||':>14} | {'||r_n||':>10} | {'||x_s - x*||':>14} | {'||r_s||':>10}")
-    print("-" * 65)
-    for res in results:
-        print(f"{res['sigma']:6.2f} | "
-              f"{res['param_err_normal']:14.6f} | "
-              f"{res['resid_norm_normal']:10.6f} | "
-              f"{res['param_err_svd']:14.6f} | "
-              f"{res['resid_norm_svd']:10.6f}")
-
-if __name__ == "__main__":
-    noise_sensitivity_experiment()
+    return results
