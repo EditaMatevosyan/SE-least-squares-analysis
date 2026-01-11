@@ -23,6 +23,7 @@ SE-least-squares-analysis/
 ├─ my_traffic.csv         # Optional real dataset (user-provided)
 └─ README.md
 
+
 Import paths are flat — no src/ folder is used.
 
 ---
