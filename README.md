@@ -102,9 +102,3 @@ Python 3.8+
 Install dependencies:
 pip install numpy matplotlib
 
----
-
-## Author
-
-Developed by **Edita Matevosyan (2026)**
-Software Engineering Project 44
